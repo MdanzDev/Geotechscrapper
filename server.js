@@ -25,11 +25,11 @@ const CONFIG = {
   SERPAPI_KEY: process.env.SERPAPI_KEY || '',
   GEOCODE_CACHE_FILE: process.env.GEOCODE_CACHE_FILE || './geocode_cache.json',
   INFOBANJIR_BASE: 'https://publicinfobanjir.water.gov.my',
-  CRON_SCHEDULE: process.env.CRON_SCHEDULE || '*/15 * * * *',
+  CRON_SCHEDULE: process.env.CRON_SCHEDULE || '*/4 * * * *',
   PAGE_TIMEOUT_MS: 15000,
   PAGE_WAIT_MS: 2000,
   HTTP_PORT: 3000,
-  DATA_RETENTION_HOURS: 24,
+  DATA_RETENTION_HOURS: 2,
 };
 
 // ============================================
