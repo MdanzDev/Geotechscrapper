@@ -1,0 +1,41 @@
+{
+  "name": "floodintel-worker",
+  "version": "10.0.0",
+  "type": "module",
+  "description": "FloodIntel Hybrid Flood Intelligence Platform - Data Ingestion & Risk Alert Worker for BIICC 2026",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "setup": "npx playwright install chromium",
+    "logs": "tail -f logs/combined.log",
+    "logs:error": "tail -f logs/error.log",
+    "health": "curl http://localhost:3000/health",
+    "trigger": "curl http://localhost:3000/trigger"
+  },
+  "keywords": [
+    "flood",
+    "monitoring",
+    "scraper",
+    "worker",
+    "malaysia",
+    "hydrology",
+    "disaster",
+    "alert",
+    "biicc",
+    "floodintel"
+  ],
+  "author": "FloodIntel Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "playwright": "^1.40.0",
+    "winston": "^3.11.0"
+  }
+}
