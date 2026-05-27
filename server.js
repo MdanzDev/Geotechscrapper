@@ -1,5 +1,6 @@
 // server.js — FloodIntel v10.0 FINAL COMPLETE
 // All fixes: Auto-resolve alerts, correct timestamps, auto-cleanup, working DB
+// WhatsApp + Telegram notifications to all subscribed users
 // BIICC 2026
 
 import 'dotenv/config';
@@ -22,6 +23,7 @@ const CONFIG = {
   YILZI_API_KEY: process.env.YILZI_API_KEY || 'zap_f572de1d3815e81725695f838439997c',
   YILZI_BASE_URL: process.env.YILZI_BASE_URL || 'https://yilzi.me/api',
   ADMIN_WHATSAPP: process.env.ADMIN_WHATSAPP || '60137345871',
+  TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '8878886366:AAGnCm9uODcyZNqrxrbJfzTfbBM9ucqjXIo',
   SERPAPI_KEY: process.env.SERPAPI_KEY || '',
   GEOCODE_CACHE_FILE: process.env.GEOCODE_CACHE_FILE || './geocode_cache.json',
   INFOBANJIR_BASE: 'https://publicinfobanjir.water.gov.my',
@@ -284,7 +286,6 @@ const db = {
         });
         if (!error) ins += chunk.length;
         else {
-          // Fallback: delete then insert
           const ids = chunk.map(s => s.station_id);
           const ts = chunk.map(s => s.timestamp);
           try { await supabase.from('river_data').delete().in('station_id', ids).in('timestamp', ts); } catch {}
@@ -292,12 +293,9 @@ const db = {
           if (!e2) ins += chunk.length;
         }
       } catch (e) {
-        // Try individual inserts
         for (const row of chunk) {
           try {
-            const { error } = await supabase.from('river_data').upsert([row], {
-              onConflict: 'station_id,timestamp'
-            });
+            const { error } = await supabase.from('river_data').upsert([row], { onConflict: 'station_id,timestamp' });
             if (!error) ins++;
           } catch {}
         }
@@ -319,7 +317,6 @@ const db = {
   },
 
   async manageAlerts(processedStations) {
-    // Get stations currently in danger/alert
     const dangerStations = processedStations
       .filter(s => ['DANGER', 'ALERT'].includes(s.status))
       .map(s => ({
@@ -328,7 +325,6 @@ const db = {
         state: s.state.toLowerCase(),
       }));
 
-    // Get all active alerts
     const { data: activeAlerts } = await supabase
       .from('alerts')
       .select('*')
@@ -345,7 +341,6 @@ const db = {
         );
 
         if (!stillInDanger) {
-          // Resolve this alert - station is back to normal
           await supabase.from('alerts').update({
             status: 'resolved',
             message: (alert.message || '') + ' ✅ [Auto-selesai: Stesen kembali normal]'
@@ -356,7 +351,6 @@ const db = {
       }
     }
 
-    // Create new alerts for stations that entered danger/alert
     const existingAlertNames = (activeAlerts || [])
       .filter(a => a.status === 'active')
       .map(a => (a.location_name || '').toLowerCase());
@@ -416,14 +410,10 @@ function parseActiveWarnings(html) {
   if (!html) return { districts: activeDistricts, states: activeStates };
   
   const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-  
-  // Split by date patterns
   const rows = text.split(/(?=\d{2}-\d{2}-\d{4}\s+\d{2}:\d{2}:\d{2})/);
   
   for (const row of rows) {
     if (row.length < 20) continue;
-    
-    // Check expiry
     const dates = row.match(/(\d{2})-(\d{2})-(\d{4})\s+(\d{2}):(\d{2}):(\d{2})/g) || [];
     if (dates.length >= 2) {
       const lastDate = dates[dates.length - 1];
@@ -431,18 +421,13 @@ function parseActiveWarnings(html) {
       if (m) {
         const [, d, mo, y, h, min, s] = m;
         const expiry = new Date(`${y}-${mo}-${d}T${h}:${min}:${s}+08:00`);
-        if (expiry < now) continue; // EXPIRED
+        if (expiry < now) continue;
       }
     }
-    
     const lower = row.toLowerCase();
-    
-    // Extract states
     for (const state of KNOWN_STATES) {
       if (lower.includes(state)) activeStates.add(state);
     }
-    
-    // Extract districts from parentheses
     const parens = lower.match(/\(([^)]+)\)/g);
     if (parens) {
       for (const p of parens) {
@@ -457,7 +442,6 @@ function parseActiveWarnings(html) {
       }
     }
   }
-  
   return { districts: activeDistricts, states: activeStates };
 }
 
@@ -465,7 +449,6 @@ function isInActiveWarning(district, state, activeWarnings) {
   if (!activeWarnings) return false;
   const d = (district || '').toLowerCase().trim();
   const s = (state || '').toLowerCase().trim();
-  
   for (const ad of activeWarnings.districts) {
     if (d.includes(ad) || ad.includes(d)) return true;
   }
@@ -517,13 +500,11 @@ class Scraper {
       }
     } finally { await browser.close(); }
 
-    // Merge rainfall into river data
     const rainMap = new Map();
     for (const r of allRain) {
       if (r.station_id) rainMap.set(r.station_id, r.rainfall || 0);
     }
 
-    // Deduplicate
     const merged = new Map();
     for (const s of allRiver) {
       const ex = merged.get(s.station_id);
@@ -540,10 +521,8 @@ class Scraper {
     const uniq = Array.from(merged.values());
     logger.info(`📊 ${uniq.length} unique (${allRiver.length}R + ${allRain.length}🌧️)`);
 
-    // Geocode
     const coordMap = await geocoder.resolveAll(uniq);
 
-    // Fetch warnings
     const [floodHtml, weatherHtml] = await Promise.all([
       this.fetchRaw(`${CONFIG.INFOBANJIR_BASE}/ramalan/amaran-banjir/`),
       this.fetchRaw(`${CONFIG.INFOBANJIR_BASE}/ramalan/met-alert/`)
@@ -554,7 +533,6 @@ class Scraper {
     
     logger.info(`⚠️ Flood: ${floodWarnings.states.size}S ${floodWarnings.districts.size}D | 🌩️ Weather: ${weatherAlerts.states.size}S ${weatherAlerts.districts.size}D`);
 
-    // Process stations
     const now = new Date();
     const proc = uniq.map(s => {
       const coords = coordMap.get(s.station_id) || getCoords(s.district, s.state);
@@ -597,7 +575,6 @@ class Scraper {
       };
     });
 
-    // Log results
     const counts = {};
     proc.forEach(s => counts[s.status] = (counts[s.status] || 0) + 1);
     const activeFW = proc.filter(s => s.flood_warning === 'Active').length;
@@ -607,7 +584,7 @@ class Scraper {
     const alertStations = proc.filter(s => ['DANGER','ALERT','WARNING'].includes(s.status));
     if (alertStations.length) {
       logger.info(`🚨 Alerts:`);
-      alertStations.forEach(s => logger.info(`  ${s.status}: ${s.station_name} (${s.state}) WL:${s.water_level}m W:${s.threshold_warning} A:${s.threshold_alert} D:${s.threshold_danger}`));
+      alertStations.forEach(s => logger.info(`  ${s.status}: ${s.station_name} (${s.state}) WL:${s.water_level}m`));
     }
     
     logger.info(`📊 ${Object.entries(counts).map(([k,v])=>`${k}:${v}`).join(' | ')} | ⚠️FW:${activeFW} 🌩️WA:${activeWA} 🌧️${withRain}`);
@@ -700,27 +677,135 @@ class Scraper {
 }
 
 // ============================================
-// NOTIFIER
+// FULL NOTIFICATION SYSTEM (WhatsApp + Telegram)
 // ============================================
 
 class Notifier {
-  async send(to, msg) { 
-    try { 
-      await axios.post(`${CONFIG.YILZI_BASE_URL}/send/message?device=1`, 
-        { to: to.replace(/\D/g,''), message: msg }, 
-        { headers: { Authorization: `Bearer ${CONFIG.YILZI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 15000 }
-      ); 
-    } catch {} 
+  constructor() {
+    this.TELEGRAM_BOT_TOKEN = CONFIG.TELEGRAM_BOT_TOKEN;
+    this.YILZI_API_KEY = CONFIG.YILZI_API_KEY;
+    this.YILZI_BASE_URL = CONFIG.YILZI_BASE_URL;
   }
-  
-  async sendReport({ stations, duration }) {
+
+  async sendWhatsApp(to, message) {
+    if (!this.YILZI_API_KEY) return false;
+    try {
+      const res = await axios.post(
+        `${this.YILZI_BASE_URL}/send/message?device=1`,
+        { to: to.replace(/\D/g, ''), message },
+        { headers: { 'Authorization': `Bearer ${this.YILZI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 15000 }
+      );
+      return res.data?.success || false;
+    } catch { return false; }
+  }
+
+  async sendTelegram(chatId, message) {
+    if (!this.TELEGRAM_BOT_TOKEN || !chatId) return false;
+    try {
+      const res = await axios.post(
+        `https://api.telegram.org/bot${this.TELEGRAM_BOT_TOKEN}/sendMessage`,
+        { chat_id: chatId, text: message, parse_mode: 'HTML', disable_web_page_preview: true },
+        { timeout: 10000 }
+      );
+      return res.data?.ok || false;
+    } catch { return false; }
+  }
+
+  buildAlertMessage(station) {
+    const isDanger = station.status === 'DANGER';
+    const emoji = isDanger ? '🔴' : '🟠';
+    const level = isDanger ? 'BAHAYA' : 'AMARAN';
+    
+    const telegramMsg = 
+      `<b>${emoji} ${level} — FloodIntel</b>\n\n` +
+      `<b>Stesen:</b> ${station.station_name}\n` +
+      `<b>Paras Air:</b> ${station.water_level}m\n` +
+      `<b>Paras Bahaya:</b> ${station.threshold_danger}m\n` +
+      `<b>Paras Amaran:</b> ${station.threshold_alert}m\n` +
+      `<b>Lokasi:</b> ${station.district}, ${station.state}\n` +
+      `<b>Skor Risiko:</b> ${station.risk_score}/100\n` +
+      (station.rainfall > 0 ? `<b>Hujan:</b> ${station.rainfall}mm\n` : '') +
+      `\n🕐 ${formatMY()}\n` +
+      `<a href="https://floodintel.vercel.app/alerts">🔗 Lihat di FloodIntel</a>`;
+
+    const waMsg = 
+      `${emoji} *${level} — FLOODINTEL*\n\n` +
+      `*Stesen:* ${station.station_name}\n` +
+      `*Paras Air:* ${station.water_level}m\n` +
+      `*Paras Bahaya:* ${station.threshold_danger}m\n` +
+      `*Paras Amaran:* ${station.threshold_alert}m\n` +
+      `*Lokasi:* ${station.district}, ${station.state}\n` +
+      `*Skor Risiko:* ${station.risk_score}/100\n` +
+      (station.rainfall > 0 ? `*Hujan:* ${station.rainfall}mm\n` : '') +
+      `\n🕐 ${formatMY()}\n` +
+      `🔗 https://floodintel.vercel.app/alerts`;
+
+    return { telegramMsg, waMsg };
+  }
+
+  async sendToSubscribers(dangerStations) {
+    if (!dangerStations.length) return;
+
+    logger.info(`📢 Sending alerts for ${dangerStations.length} stations to subscribers...`);
+
+    try {
+      const { data: profiles } = await supabase.from('profiles').select('*');
+
+      if (!profiles?.length) {
+        logger.info('No profiles found');
+        return;
+      }
+
+      let telegramSent = 0;
+      let whatsappSent = 0;
+      let usersNotified = 0;
+
+      for (const station of dangerStations) {
+        const { telegramMsg, waMsg } = this.buildAlertMessage(station);
+        
+        for (const profile of profiles) {
+          const threshold = profile.risk_threshold || 70;
+          if (station.risk_score < threshold) continue;
+
+          let sent = false;
+
+          // Send Telegram if: telegram=true AND telegram_chat_id has value
+          if (profile.notification_prefs?.telegram === true && profile.telegram_chat_id) {
+            const success = await this.sendTelegram(profile.telegram_chat_id, telegramMsg);
+            if (success) { telegramSent++; sent = true; }
+            await sleep(200);
+          }
+
+          // Send WhatsApp if: whatsapp=true AND phone_number has value
+          if (profile.notification_prefs?.whatsapp === true && profile.phone_number) {
+            const cleanPhone = profile.phone_number.replace(/\D/g, '');
+            if (cleanPhone.length >= 10) {
+              const success = await this.sendWhatsApp(cleanPhone, waMsg);
+              if (success) { whatsappSent++; sent = true; }
+              await sleep(500);
+            }
+          }
+
+          if (sent) usersNotified++;
+        }
+        await sleep(500);
+      }
+
+      logger.info(`📊 Notifications: ${telegramSent} Telegram + ${whatsappSent} WhatsApp sent to ${usersNotified} users`);
+    } catch (error) {
+      logger.error('Subscriber notification error:', error.message);
+    }
+  }
+
+  async sendAdminReport({ stations, duration }) {
     const danger = stations.filter(s => s.status === 'DANGER');
     const alert = stations.filter(s => s.status === 'ALERT');
     const warning = stations.filter(s => s.status === 'WARNING');
     const activeFW = stations.filter(s => s.flood_warning === 'Active').length;
     const withRain = stations.filter(s => s.rainfall > 0).length;
     
-    let msg = `🌊 *FLOODINTEL v10.0*\n📅 ${formatMY()}\n\n━━━━━━━━━━━━━━━━━\n`;
+    let msg = `🌊 *FLOODINTEL v10.0*\n📅 ${formatMY()}\n\n`;
+    msg += `━━━━━━━━━━━━━━━━━\n`;
     msg += `📊 *${stations.length} STATIONS* | ⚡${duration}s\n`;
     if (danger.length) msg += `🔴 DANGER: ${danger.length}\n`;
     if (alert.length) msg += `🟠 ALERT: ${alert.length}\n`;
@@ -728,7 +813,7 @@ class Notifier {
     msg += `⚠️ Active Warnings: ${activeFW}\n`;
     msg += `🌧️ Rain: ${withRain} stations\n`;
     msg += `\n🔗 _FloodIntel BIICC 2026_`;
-    await this.send(CONFIG.ADMIN_WHATSAPP, msg);
+    await this.sendWhatsApp(CONFIG.ADMIN_WHATSAPP, msg);
     
     const crit = [...danger, ...alert].sort((a,b)=>b.risk_score-a.risk_score);
     if (crit.length) {
@@ -738,10 +823,62 @@ class Notifier {
         am += `  🌊${s.water_level}m (D:${s.threshold_danger})\n`;
         am += `  📍${s.district}, ${s.state}\n\n`;
       }
-      await this.send(CONFIG.ADMIN_WHATSAPP, am);
+      await this.sendWhatsApp(CONFIG.ADMIN_WHATSAPP, am);
     }
     
-    await this.send(CONFIG.ADMIN_WHATSAPP, `✅ *SYSTEM OK*\n🟢 v10.0 | Auto-cleanup: ${CONFIG.DATA_RETENTION_HOURS}h`);
+    await this.sendWhatsApp(CONFIG.ADMIN_WHATSAPP, `✅ *SYSTEM OK*\n🟢 v10.0 | Auto-cleanup: ${CONFIG.DATA_RETENTION_HOURS}h`);
+  }
+
+  async sendFullReport(result) {
+    await this.sendAdminReport(result);
+    const dangerStations = result.stations.filter(s => s.status === 'DANGER' || s.status === 'ALERT');
+    if (dangerStations.length > 0) {
+      await this.sendToSubscribers(dangerStations);
+    }
+  }
+}
+
+// ============================================
+// TELEGRAM BOT WEBHOOK
+// ============================================
+
+async function handleTelegramWebhook(req, res) {
+  if (req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', async () => {
+      try {
+        const update = JSON.parse(body);
+        if (update.message) {
+          const chatId = update.message.chat.id;
+          const text = update.message.text || '';
+          
+          if (text === '/start') {
+            const msg = 
+              '🌊 *FloodIntel Bot*\n\n' +
+              'Anda akan menerima amaran banjir!\n\n' +
+              'Chat ID anda: `' + chatId + '`\n\n' +
+              '📋 Masukkan ID ini di Profil FloodIntel\n' +
+              '🔗 floodintel.vercel.app/profile\n\n' +
+              'Hantar /stop untuk berhenti.';
+            
+            await axios.post(
+              `https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`,
+              { chat_id: chatId, text: msg, parse_mode: 'Markdown' }
+            );
+            logger.info(`📝 New Telegram user: ${chatId}`);
+          } else if (text === '/stop') {
+            await axios.post(
+              `https://api.telegram.org/bot${CONFIG.TELEGRAM_BOT_TOKEN}/sendMessage`,
+              { chat_id: chatId, text: '✅ Anda berhenti menerima amaran. Hantar /start untuk mula semula.' }
+            );
+          }
+        }
+        res.writeHead(200); res.end('OK');
+      } catch { res.writeHead(500); res.end('Error'); }
+    });
+  } else {
+    res.writeHead(200); res.end('FloodIntel Bot');
   }
 }
 
@@ -753,7 +890,7 @@ class Pipeline {
   constructor(geocoder) { 
     this.geocoder = geocoder; 
     this.scraper = new Scraper(); 
-    this.notifier = new Notifier(); 
+    this.notifier = new Notifier();
     this.running = false; 
   }
   
@@ -768,7 +905,9 @@ class Pipeline {
       await db.manageAlerts(result.stations);
       
       logger.info(`💾 DB: ${inserted}/${result.stations.length} | 🧹 Cleaned | 📋 Alerts managed`);
-      await this.notifier.sendReport(result);
+      
+      // Send full report (admin + subscribers)
+      await this.notifier.sendFullReport(result);
     } catch (e) { 
       logger.error('Pipeline:', e.message); 
     } finally { 
@@ -783,7 +922,8 @@ class Pipeline {
 
 async function main() {
   console.log('\n🌊 FLOODINTEL v10.0 FINAL\n');
-  console.log(`🧹 Auto-delete: ${CONFIG.DATA_RETENTION_HOURS}h | 📋 Auto-alerts: ON\n`);
+  console.log(`🧹 Auto-delete: ${CONFIG.DATA_RETENTION_HOURS}h | 📋 Auto-alerts: ON`);
+  console.log(`📱 WhatsApp: ${CONFIG.ADMIN_WHATSAPP} | 🤖 Telegram: ${CONFIG.TELEGRAM_BOT_TOKEN ? 'ON' : 'OFF'}\n`);
   
   const cache = new GeocodeCache(CONFIG.GEOCODE_CACHE_FILE);
   cache.load();
@@ -793,8 +933,11 @@ async function main() {
   
   const pipeline = new Pipeline(geocoder);
   
-  // Health API
+  // HTTP Server (Health API + Telegram Webhook)
   http.createServer((req, res) => {
+    if (req.url?.startsWith('/telegram-webhook')) {
+      return handleTelegramWebhook(req, res);
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ 
       status: 'ok', version: '10.0', 
