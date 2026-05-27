@@ -726,7 +726,7 @@ class Notifier {
       `<b>Skor Risiko:</b> ${station.risk_score}/100\n` +
       (station.rainfall > 0 ? `<b>Hujan:</b> ${station.rainfall}mm\n` : '') +
       `\n🕐 ${formatMY()}\n` +
-      `<a href="https://floodintel.vercel.app/alerts">🔗 Lihat di FloodIntel</a>`;
+      `<a href="https://geotech.kryz-net.space">🔗 Lihat di FloodIntel</a>`;
 
     const waMsg = 
       `${emoji} *${level} — FLOODINTEL*\n\n` +
@@ -738,7 +738,7 @@ class Notifier {
       `*Skor Risiko:* ${station.risk_score}/100\n` +
       (station.rainfall > 0 ? `*Hujan:* ${station.rainfall}mm\n` : '') +
       `\n🕐 ${formatMY()}\n` +
-      `🔗 https://floodintel.vercel.app/alerts`;
+      `🔗 https://geotech.kryz-net.space`;
 
     return { telegramMsg, waMsg };
   }
