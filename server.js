@@ -691,7 +691,7 @@ class Notifier {
     if (!this.YILZI_API_KEY) return false;
     try {
       const res = await axios.post(
-        `${this.YILZI_BASE_URL}/send/message?device=1`,
+        `${this.YILZI_BASE_URL}/send/message?device=2`,
         { to: to.replace(/\D/g, ''), message },
         { headers: { 'Authorization': `Bearer ${this.YILZI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 15000 }
       );
